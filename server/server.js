@@ -14,7 +14,18 @@ const certificateRoutes = require('./routes/certificateRoutes');
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
-const clientOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((origin) => origin.trim());
+
+// All allowed dev origins. Override in production by setting CLIENT_ORIGIN env var
+// (comma-separated list, e.g. "https://yourapp.com").
+const DEV_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+const clientOrigins = process.env.CLIENT_ORIGIN
+  ? process.env.CLIENT_ORIGIN.split(',').map((o) => o.trim())
+  : DEV_ORIGINS;
 
 app.disable('x-powered-by');
 app.use((_req, res, next) => {

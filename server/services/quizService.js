@@ -19,6 +19,15 @@ const SKILL_ALIASES = {
     'sql': 'SQL',
     'git': 'Git',
     'dsa': 'DSA',
+    'java': 'Java',
+    'cloud': 'Cloud',
+    'cloud computing': 'Cloud',
+    'os': 'OS',
+    'operating systems': 'OS',
+    'operating system': 'OS',
+    'dbms': 'DBMS',
+    'database management': 'DBMS',
+    'database management systems': 'DBMS',
     'machine learning': 'DSA',   // fallback — no ML key in dataset
     'ui/ux (figma)': 'HTML',     // fallback — no Figma key in dataset
     'figma': 'HTML',
@@ -37,16 +46,26 @@ function getRandomQuestions(pool, count) {
     return shuffled.slice(0, Math.min(count, shuffled.length))
 }
 
+// Shuffle a question's options while keeping the answer string accurate.
+// The answer field stores the correct option text, so reordering options
+// does not affect grading — the text match still works.
+function shuffleOptions(question) {
+    const options = [...question.options].sort(() => Math.random() - 0.5)
+    return { ...question, options }
+}
+
 function getMixedQuiz(skill) {
     const skillKey = resolveSkillKey(skill)
     if (!skillKey || !questions[skillKey]) return []
 
     const s = questions[skillKey]
-    const beginner     = getRandomQuestions(s.beginner     || [], 2)
-    const intermediate = getRandomQuestions(s.intermediate || [], 2)
+    const beginner     = getRandomQuestions(s.beginner     || [], 1)
+    const intermediate = getRandomQuestions(s.intermediate || [], 1)
     const advanced     = getRandomQuestions(s.advanced     || [], 1)
 
-    return [...beginner, ...intermediate, ...advanced].sort(() => Math.random() - 0.5)
+    return [...beginner, ...intermediate, ...advanced]
+        .sort(() => Math.random() - 0.5)
+        .map(shuffleOptions)
 }
 
 function getQuiz(skill, level, count = 5) {

@@ -23,9 +23,88 @@ router.get('/', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ─── GET /api/courses/assessment-recommendations ──────────────────────────
+// Returns courses that match the student's MOST RECENT assessment results only.
+// Uses Assessment.results (the actual skills selected + proficiency levels from
+// the latest completed assessment), not the full cumulative skillProfile.
+router.get('/assessment-recommendations', requireAuth, allowRoles('student'), async (req, res, next) => {
+  try {
+    // Fetch the most recent completed assessment for this student
+    const Assessment = require('../models/Assessment');
+    const latestAssessment = await Assessment.findOne({
+      student: req.auth.sub,
+      status: 'completed',
+    }).sort({ completedAt: -1 });
+
+    if (!latestAssessment || !latestAssessment.results || !latestAssessment.results.length) {
+      return res.json({ courses: [] });
+    }
+
+    const enrollmentIds = new Set(
+      (await Enrollment.find({ student: req.auth.sub }).select('course'))
+        .map((e) => String(e.course))
+    );
+
+    // Normalize level: ML uses 'legend', course data uses 'advanced'
+    const normLevel = (l) => {
+      const v = normalize(l || 'beginner');
+      return v === 'legend' ? 'advanced' : v;
+    };
+
+    const allCourses = await Course.find({ published: true });
+    const results = [];
+
+    for (const sp of latestAssessment.results) {
+      const targetSkill = normalize(sp.skill);
+      const targetLevel = normLevel(sp.level);
+
+      // Exact match: course covers this skill at this proficiency level
+      const exact = allCourses.filter(
+        (c) =>
+          (c.skills || []).map(normalize).includes(targetSkill) &&
+          normalize(c.level) === targetLevel
+      );
+
+      // Adjacent level fallback (one step up) when no exact match
+      const adjacent = exact.length ? [] : allCourses.filter((c) => {
+        const lvl = normalize(c.level);
+        const cs  = (c.skills || []).map(normalize);
+        if (!cs.includes(targetSkill)) return false;
+        if (targetLevel === 'beginner')     return lvl === 'intermediate';
+        if (targetLevel === 'intermediate') return lvl === 'advanced';
+        return false;
+      });
+
+      const pool = exact.length ? exact : adjacent;
+
+      // Prefer not-yet-enrolled; take up to 2 per skill
+      const sorted = [...pool].sort(
+        (a, b) =>
+          (enrollmentIds.has(String(a._id)) ? 1 : 0) -
+          (enrollmentIds.has(String(b._id)) ? 1 : 0)
+      );
+
+      for (const course of sorted.slice(0, 2)) {
+        if (!results.find((r) => String(r._id) === String(course._id))) {
+          results.push({
+            ...course.toJSON(),
+            enrolled: enrollmentIds.has(String(course._id)),
+            matchedSkill: sp.skill,
+            matchedLevel: sp.level,
+            explainabilityTag: `Matched to your ${sp.level} level in ${sp.skill}`,
+          });
+        }
+      }
+    }
+
+    return res.json({ courses: results });
+  } catch (e) { next(e); }
+});
+
 // ─── GET /api/courses/recommended ─────────────────────────────────────────
 router.get('/recommended', requireAuth, allowRoles('student'), async (req, res, next) => {
   try {
+    const Assessment = require('../models/Assessment');
     const user          = await User.findById(req.auth.sub);
     const courses       = await Course.find({ published: true });
     const enrollmentIds = new Set(
@@ -34,6 +113,15 @@ router.get('/recommended', requireAuth, allowRoles('student'), async (req, res, 
     );
     const profile   = new Map(user.skillProfile.map((item) => [normalize(item.skill), item]));
     const interests = user.interests.map(normalize);
+
+    // Skills covered by the latest assessment — exclude from general recommendations
+    const latestAssessment = await Assessment.findOne({
+      student: req.auth.sub,
+      status: 'completed',
+    }).sort({ completedAt: -1 });
+    const latestSkills = new Set(
+      (latestAssessment?.results || []).map((r) => normalize(r.skill))
+    );
 
     const ranked = courses.map((course) => {
       const cs = (course.skills || []).map(normalize);
@@ -58,7 +146,13 @@ router.get('/recommended', requireAuth, allowRoles('student'), async (req, res, 
       const interestHits   = cs.filter((s) => interests.includes(s)).length;
       const intAlign       = cs.length ? Math.min(100, Math.round((interestHits / cs.length) * 100)) : 0;
       const creditEff      = Math.min(100, Math.round((course.hours ? course.credits / course.hours : 0.1) * 500));
-      const rankScore      = Math.round(phaseGapWeight * 0.45 + intAlign * 0.35 + creditEff * 0.20);
+
+      // Deprioritize courses whose skills are all covered by the latest assessment
+      // so they appear in the assessment section instead
+      const allSkillsInLatest = cs.length > 0 && cs.every((s) => latestSkills.has(s));
+      const latestPenalty = allSkillsInLatest ? -40 : 0;
+
+      const rankScore = Math.round(phaseGapWeight * 0.45 + intAlign * 0.35 + creditEff * 0.20) + latestPenalty;
 
       let tag = '';
       if (primarySkill) {

@@ -64,6 +64,14 @@ export default function Internships() {
   const [query, setQuery] = useState('');
   const [mode, setMode]   = useState('');
 
+  // Applied internship IDs for the current user (persisted via backend)
+  const [appliedIds, setAppliedIds] = useState(new Set());
+  // Full application objects keyed by internship ID — for status display
+  const [applicationMap, setApplicationMap] = useState(new Map());
+
+  // Status modal
+  const [statusApp, setStatusApp] = useState(null);
+
   // Resume match state
   const [showResumePanel, setShowResumePanel] = useState(false);
   const [resumeText, setResumeText]           = useState('');
@@ -76,18 +84,82 @@ export default function Internships() {
   // Application modal
   const [selected, setSelected] = useState(null);
   const [letter, setLetter]     = useState('');
+  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeError, setResumeError] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
   const [error, setError]       = useState('');
   const [notice, setNotice]     = useState('');
+
+  // Partner — post internship form
+  const initialPostForm = { title: '', description: '', skills: '', location: '', mode: 'remote', durationWeeks: 12, stipend: 10000, credits: 4, deadline: '' };
+  const [postForm, setPostForm]   = useState(initialPostForm);
+  const [postBusy, setPostBusy]   = useState(false);
+  const [showPostForm, setShowPostForm] = useState(false);
+  const updatePost = (k, v) => setPostForm((f) => ({ ...f, [k]: v }));
+  const submitPost = async (e) => {
+    e.preventDefault();
+    setError(''); setNotice(''); setPostBusy(true);
+    try {
+      await api('/internships', {
+        method: 'POST',
+        body: {
+          title: postForm.title,
+          description: postForm.description,
+          skills: postForm.skills.split(',').map((s) => s.trim()).filter(Boolean),
+          location: postForm.location,
+          mode: postForm.mode,
+          durationWeeks: Number(postForm.durationWeeks),
+          stipend: Number(postForm.stipend),
+          credits: Number(postForm.credits),
+          deadline: postForm.deadline,
+        },
+      });
+      setPostForm(initialPostForm);
+      setShowPostForm(false);
+      setNotice('Internship submitted for coordinator verification. It will appear to students once approved.');
+    } catch (err) { setError(err.message); }
+    finally { setPostBusy(false); }
+  };
+
+  // Partner — role preview modal (for "Post a Role" on listing cards)
+  const [previewRole, setPreviewRole] = useState(null); // internship object from listings
+  const [previewDeadline, setPreviewDeadline] = useState('');
+  const [previewBusy, setPreviewBusy] = useState(false);
+  // Partner's own posted internships (for filter + duplicate check)
+  const [myPostedRoles, setMyPostedRoles] = useState([]);
+  // Filter by partner's own role title (replaces "applied" filter)
+  // true = show only this partner's posted internships
+  const [myRolesActive, setMyRolesActive] = useState(false);
 
   useEffect(() => {
     let active = true;
     Promise.all([
       api('/internships'),
       api('/internships/partners/quadrant').catch(() => ({ partners: [] })),
-    ]).then(([internshipData, quadrantData]) => {
+      user?.role === 'student'
+        ? api('/internships/applications/mine').catch(() => ({ applications: [] }))
+        : Promise.resolve({ applications: [] }),
+      user?.role === 'partner'
+        ? api('/internships/mine').catch(() => ({ internships: [] }))
+        : Promise.resolve({ internships: [] }),
+    ]).then(([internshipData, quadrantData, applicationData, myRolesData]) => {
       if (!active) return;
       setInternships(internshipData.internships || []);
       setPartnersQuadrant(quadrantData.partners || []);
+      const ids = new Set(
+        (applicationData.applications || [])
+          .map((a) => String(a.internship?._id || a.internship))
+          .filter(Boolean)
+      );
+      setAppliedIds(ids);
+      const appMap = new Map(
+        (applicationData.applications || []).map((a) => [
+          String(a.internship?._id || a.internship),
+          a,
+        ])
+      );
+      setApplicationMap(appMap);
+      setMyPostedRoles(myRolesData.internships || []);
     }).catch((e) => { if (active) setError(e.message); });
     return () => { active = false; };
   }, []);
@@ -121,13 +193,23 @@ export default function Internships() {
       );
   }, [internships, resumeTokens, resumeActive]);
 
+  // Set of internship IDs posted by this partner (for "My Roles" filter)
+  const myPostedIds = new Set(myPostedRoles.map((r) => String(r._id)));
+
   const shown = rankedInternships.filter((item) => {
     const textMatch = `${item.title} ${item.organization} ${item.skills.join(' ')}`
       .toLowerCase()
       .includes(query.toLowerCase());
+    const isApplied = appliedIds.has(String(item._id));
+
+    // Student applied filter
+    if (mode === 'applied') return isApplied && textMatch;
+    // Standard mode + org filters
     const modeMatch = !mode || item.mode === mode;
     const orgMatch  = !quadrantOrgFilter || item.organization === quadrantOrgFilter;
-    return textMatch && modeMatch && orgMatch;
+    // Partner "My Roles" filter — composable with mode
+    const myRolesMatch = !myRolesActive || myPostedIds.has(String(item._id));
+    return textMatch && modeMatch && orgMatch && myRolesMatch && (user?.role === 'partner' ? true : !isApplied);
   });
 
   // ── Fallback demo data for quadrant ──────────────────────────────────────
@@ -140,14 +222,37 @@ export default function Internships() {
   ];
 
   const apply = async () => {
-    setError(''); setNotice('');
+    setResumeError('');
+    if (!resumeFile) { setResumeError('Please attach your resume (PDF, DOC, or DOCX).'); return; }
+    const allowed = ['application/pdf', 'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (!allowed.includes(resumeFile.type)) {
+      setResumeError('Only PDF, DOC, and DOCX files are accepted.');
+      return;
+    }
+    if (resumeFile.size > 5 * 1024 * 1024) {
+      setResumeError('File must be under 5 MB.');
+      return;
+    }
+    setError(''); setNotice(''); setApplyBusy(true);
     try {
-      await api(`/internships/${selected._id}/apply`, {
-        method: 'POST', body: { coverLetter: letter },
-      });
+      const session = JSON.parse(localStorage.getItem('prashikshan_session') || 'null');
+      const formData = new FormData();
+      formData.append('resume', resumeFile);
+      formData.append('coverLetter', letter);
+      const res = await fetch(
+        `${(import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')}/internships/${selected._id}/apply`,
+        { method: 'POST', headers: session?.token ? { Authorization: `Bearer ${session.token}` } : {}, body: formData }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Application failed.');
+      const internshipId = String(selected._id);
+      setAppliedIds((prev) => new Set([...prev, internshipId]));
+      setApplicationMap((prev) => new Map([...prev, [internshipId, { ...data.application, internship: selected }]]));
       setNotice(`Application sent to ${selected.organization}. You can track it in your workspace.`);
-      setSelected(null); setLetter('');
+      setSelected(null); setLetter(''); setResumeFile(null);
     } catch (e) { setError(e.message); }
+    finally { setApplyBusy(false); }
   };
 
   // ── Tab button style helper ───────────────────────────────────────────────
@@ -186,6 +291,94 @@ export default function Internships() {
 
       {(error || notice) && (
         <p className={error ? 'form-alert' : 'form-success'}>{error || notice}</p>
+      )}
+
+      {/* ── POST INTERNSHIP (partner only) ── */}
+      {user?.role === 'partner' && (
+        <div style={{ marginBottom: 22 }}>
+          <button
+            className={showPostForm ? 'button button-outline' : 'button'}
+            onClick={() => setShowPostForm((v) => !v)}>
+            {showPostForm ? '✕ Cancel' : '+ Post Internship'}
+          </button>
+
+          {showPostForm && (
+            <section className="panel" style={{ marginTop: 14 }}>
+              <p className="eyebrow">New opportunity</p>
+              <h2 style={{ marginBottom: 18 }}>Post an internship offer</h2>
+
+              {/* Verification gate — shown only when not verified */}
+              {!user.isVerifiedPartner ? (
+                <div style={{ padding: '14px 16px', background: '#fffbeb',
+                              border: '1px solid #f0d080', borderRadius: 7 }}>
+                  <strong style={{ fontSize: 12, color: '#7a5500' }}>
+                    ⚠ Organisation not yet verified
+                  </strong>
+                  <p style={{ margin: '6px 0 0', fontSize: 12, color: '#7a5500', lineHeight: 1.6 }}>
+                    A coordinator must verify your account before you can post internships.
+                    Go to your <a href="/partner" style={{ color: '#b45309', fontWeight: 700 }}>Industry Workspace</a> to
+                    request verification or use the dev-only instant verification button.
+                  </p>
+                </div>
+              ) : (
+              <form className="stack-form" onSubmit={submitPost}>
+                <label>Role title
+                  <input required value={postForm.title}
+                         onChange={(e) => updatePost('title', e.target.value)}
+                         placeholder="e.g. Frontend Engineering Intern" />
+                </label>
+                <label>Description
+                  <textarea required value={postForm.description}
+                             onChange={(e) => updatePost('description', e.target.value)}
+                             placeholder="Responsibilities, mentorship, eligibility, outcomes…" />
+                </label>
+                <div className="field-grid">
+                  <label>Required skills (comma-separated)
+                    <input required value={postForm.skills}
+                           onChange={(e) => updatePost('skills', e.target.value)}
+                           placeholder="react, javascript, css" />
+                  </label>
+                  <label>Location
+                    <input required value={postForm.location}
+                           onChange={(e) => updatePost('location', e.target.value)}
+                           placeholder="Remote or city name" />
+                  </label>
+                </div>
+                <div className="field-grid three">
+                  <label>Mode
+                    <select value={postForm.mode} onChange={(e) => updatePost('mode', e.target.value)}>
+                      <option value="remote">Remote</option>
+                      <option value="hybrid">Hybrid</option>
+                      <option value="onsite">On-site</option>
+                    </select>
+                  </label>
+                  <label>Duration (weeks)
+                    <input min="1" type="number" value={postForm.durationWeeks}
+                           onChange={(e) => updatePost('durationWeeks', e.target.value)} />
+                  </label>
+                  <label>NEP Credits
+                    <input min="1" type="number" value={postForm.credits}
+                           onChange={(e) => updatePost('credits', e.target.value)} />
+                  </label>
+                </div>
+                <div className="field-grid">
+                  <label>Monthly stipend (₹)
+                    <input min="0" type="number" value={postForm.stipend}
+                           onChange={(e) => updatePost('stipend', e.target.value)} />
+                  </label>
+                  <label>Application deadline
+                    <input required type="date" value={postForm.deadline}
+                           onChange={(e) => updatePost('deadline', e.target.value)} />
+                  </label>
+                </div>
+                <button className="button button-full" disabled={postBusy}>
+                  {postBusy ? 'Submitting…' : 'Submit for verification'}
+                </button>
+              </form>
+              )}
+            </section>
+          )}
+        </div>
       )}
 
       {/* ── SMART RESUME MATCH BANNER ── */}
@@ -363,11 +556,29 @@ export default function Internships() {
             />
             <div className="filter-bar">
               {['', 'remote', 'hybrid', 'onsite'].map((m) => (
-                <button key={m || 'all'} className={mode === m ? 'active' : ''}
-                        onClick={() => setMode(m)}>
+                <button key={m || 'all'} className={mode === m && !myRolesActive ? 'active' : ''}
+                        onClick={() => { setMode(m); setMyRolesActive(false); }}>
                   {m || 'all modes'}
                 </button>
               ))}
+              {/* Student: "applied" filter. Partner: "my roles" filter */}
+              {user?.role === 'student' && (
+                <button
+                  className={mode === 'applied' ? 'active' : ''}
+                  onClick={() => { setMode('applied'); setMyRolesActive(false); }}>
+                  applied
+                </button>
+              )}
+              {user?.role === 'partner' && (
+                <button
+                  className={myRolesActive ? 'active' : ''}
+                  onClick={() => {
+                    setMyRolesActive((v) => !v);
+                    setMode('');
+                  }}>
+                  my roles
+                </button>
+              )}
             </div>
           </div>
 
@@ -425,11 +636,29 @@ export default function Internships() {
                       <small>Apply by {formatDate(item.deadline)}</small>
                     </div>
                     {user?.role === 'student' ? (
-                      <button className="button button-small" onClick={() => setSelected(item)}>
-                        Apply
-                      </button>
+                      appliedIds.has(String(item._id)) ? (
+                        <button
+                          className="button button-small button-outline"
+                          onClick={() => setStatusApp(applicationMap.get(String(item._id)))}>
+                          Check Status
+                        </button>
+                      ) : (
+                        <button className="button button-small" onClick={() => setSelected(item)}>
+                          Apply
+                        </button>
+                      )
                     ) : user?.role === 'partner' ? (
-                      <Link className="button button-small button-outline" to="/partner">Post a role</Link>
+                      <button
+                        className="button button-small button-outline"
+                        onClick={() => {
+                          setPreviewRole(item);
+                          // Default deadline 30 days from today
+                          const d = new Date();
+                          d.setDate(d.getDate() + 30);
+                          setPreviewDeadline(d.toISOString().split('T')[0]);
+                        }}>
+                        Post a Role
+                      </button>
                     ) : (
                       <Link className="button button-small button-outline" to="/login">Sign in to apply</Link>
                     )}
@@ -630,17 +859,128 @@ export default function Internships() {
         </section>
       )}
 
+      {/* ── STATUS MODAL ── */}
+      {statusApp && (() => {
+        // Map backend status to the 4 display stages
+        const STAGES = ['applied', 'under review', 'selected', 'rejected'];
+        const STATUS_MAP = {
+          applied:     { stage: 'applied',      step: 0 },
+          shortlisted: { stage: 'under review', step: 1 },
+          interview:   { stage: 'under review', step: 1 },
+          offered:     { stage: 'selected',     step: 2 },
+          accepted:    { stage: 'selected',     step: 2 },
+          rejected:    { stage: 'rejected',     step: -1 },
+          'in-progress':{ stage: 'selected',   step: 2 },
+          completed:   { stage: 'selected',     step: 2 },
+        };
+        const mapped  = STATUS_MAP[statusApp.status] || { stage: 'applied', step: 0 };
+        const isRejected = mapped.step === -1;
+        // Progress bar: rejected = 0%, otherwise spread across 3 positive steps
+        const barPct = isRejected ? 0 : Math.round(((mapped.step + 1) / 3) * 100);
+        const internshipTitle = statusApp.internship?.title || 'Internship';
+        const orgName = statusApp.internship?.organization || '';
+
+        return (
+          <div className="modal-backdrop" role="dialog" aria-modal="true"
+               aria-labelledby="status-title" onClick={() => setStatusApp(null)}>
+            <section className="modal" style={{ width: 'min(100%, 480px)' }}
+                     onClick={(e) => e.stopPropagation()}>
+              <button className="modal-close" onClick={() => setStatusApp(null)} aria-label="Close">×</button>
+              <p className="eyebrow">Application Status</p>
+              <h2 id="status-title" style={{ margin: '4px 0 4px', fontSize: 22 }}>{internshipTitle}</h2>
+              <p className="muted" style={{ marginBottom: 20 }}>{orgName}</p>
+
+              {/* Stage labels */}
+              <div style={{ display: 'flex', justifyContent: 'space-between',
+                            marginBottom: 6, fontSize: 10, fontWeight: 800 }}>
+                {STAGES.filter((s) => s !== 'rejected').map((s, i) => (
+                  <span key={s} style={{
+                    color: !isRejected && mapped.step >= i ? '#1c563e' : '#9aaa9d',
+                    textTransform: 'capitalize',
+                  }}>{s}</span>
+                ))}
+              </div>
+
+              {/* Blue progress bar */}
+              <div style={{ height: 8, borderRadius: 20, background: '#e2ebd9',
+                            marginBottom: 14, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 20,
+                  width: `${barPct}%`,
+                  background: isRejected ? '#e05252' : '#2563eb',
+                  transition: 'width .4s ease',
+                }} />
+              </div>
+
+              {/* Current status badge */}
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 8,
+                padding: '8px 14px', borderRadius: 6, marginBottom: 16,
+                background: isRejected ? '#fae9e5' : '#dbeafe',
+                border: `1px solid ${isRejected ? '#f3c9c0' : '#bfdbfe'}`,
+              }}>
+                <span style={{ fontSize: 16 }}>
+                  {isRejected ? '✗' : mapped.step === 2 ? '✓' : '●'}
+                </span>
+                <div>
+                  <strong style={{ fontSize: 12, color: isRejected ? '#943727' : '#1d4ed8',
+                                   textTransform: 'capitalize', display: 'block' }}>
+                    {mapped.stage}
+                  </strong>
+                  <small style={{ fontSize: 10, color: isRejected ? '#b54b3c' : '#3b82f6' }}>
+                    {isRejected
+                      ? 'Your application was not taken forward at this time.'
+                      : mapped.step === 0
+                        ? 'Your application was received successfully.'
+                        : mapped.step === 1
+                          ? 'The team is reviewing your profile.'
+                          : 'Congratulations — you have been selected!'}
+                  </small>
+                </div>
+              </div>
+
+              {/* Timeline */}
+              {statusApp.timeline?.length > 0 && (
+                <div style={{ borderTop: '1px solid #e7ece6', paddingTop: 12 }}>
+                  <p style={{ fontSize: 10, fontWeight: 800, color: '#5a6a5c',
+                               margin: '0 0 8px', textTransform: 'uppercase',
+                               letterSpacing: '0.07em' }}>Timeline</p>
+                  {statusApp.timeline.map((t, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 6,
+                                          alignItems: 'flex-start' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', marginTop: 4,
+                                     flexShrink: 0, background: '#2563eb' }} />
+                      <div>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#1d3a26',
+                                       textTransform: 'capitalize' }}>{t.status}</span>
+                        {t.note && (
+                          <span style={{ fontSize: 10, color: '#7a8a7c',
+                                         marginLeft: 6 }}>{t.note}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button className="button button-outline button-full"
+                      style={{ marginTop: 16 }}
+                      onClick={() => setStatusApp(null)}>Close</button>
+            </section>
+          </div>
+        );
+      })()}
+
       {/* ── APPLICATION MODAL ── */}
       {selected && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="apply-title">
           <section className="modal">
-            <button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button>
+            <button className="modal-close" onClick={() => { setSelected(null); setResumeFile(null); setResumeError(''); }} aria-label="Close">×</button>
             <p className="eyebrow">Application</p>
             <h2 id="apply-title">{selected.title}</h2>
             <p className="muted">
               {selected.organization} · {selected.credits} academic credits on verified completion.
             </p>
-            {/* Resume match context reminder */}
             {resumeActive && selected.resumeScore !== undefined && (
               <div style={{
                 padding: '8px 12px', marginBottom: 16, borderRadius: 6,
@@ -654,6 +994,25 @@ export default function Internships() {
                 ).join(', ') || 'some of the requirements'}.
               </div>
             )}
+
+            {/* Resume upload — required */}
+            <label style={{ marginBottom: 4 }}>
+              Resume <span style={{ color: '#e05252', fontWeight: 800 }}>*</span>
+              <span className="optional" style={{ marginLeft: 6 }}>PDF, DOC, DOCX · max 5 MB</span>
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                onChange={(e) => { setResumeFile(e.target.files?.[0] || null); setResumeError(''); }}
+                style={{ marginTop: 6 }}
+              />
+            </label>
+            {resumeFile && (
+              <p style={{ fontSize: 11, color: '#2d6040', marginBottom: 8 }}>
+                ✓ {resumeFile.name} ({(resumeFile.size / 1024).toFixed(0)} KB)
+              </p>
+            )}
+            {resumeError && <p className="form-alert" style={{ marginBottom: 10 }}>{resumeError}</p>}
+
             <label>
               Why are you a strong fit? <span className="optional">optional</span>
               <textarea
@@ -663,10 +1022,128 @@ export default function Internships() {
                 placeholder="Briefly describe relevant skills, work, or motivation."
               />
             </label>
-            <button className="button button-full" onClick={apply}>Submit application</button>
+            <button className="button button-full" disabled={applyBusy} onClick={apply}>
+              {applyBusy ? 'Submitting…' : 'Submit application'}
+            </button>
           </section>
         </div>
       )}
+      {/* ── ROLE PREVIEW MODAL (partner "Post a Role") ── */}
+      {previewRole && (() => {
+        const alreadyPosted = myPostedRoles.some(
+          (r) => r.title.trim().toLowerCase() === previewRole.title.trim().toLowerCase()
+        );
+
+        const handlePost = async () => {
+          if (!previewDeadline) return;
+          setError(''); setPreviewBusy(true);
+          try {
+            const result = await api('/internships', {
+              method: 'POST',
+              body: {
+                title: previewRole.title,
+                description: previewRole.description,
+                skills: previewRole.skills,
+                location: previewRole.location,
+                mode: previewRole.mode,
+                durationWeeks: previewRole.durationWeeks,
+                stipend: previewRole.stipend ?? 0,
+                credits: previewRole.credits,
+                capacity: previewRole.capacity ?? 1,
+                deadline: previewDeadline,
+              },
+            });
+            // Refresh partner's posted roles
+            const myRolesData = await api('/internships/mine').catch(() => ({ internships: [] }));
+            setMyPostedRoles(myRolesData.internships || []);
+            setNotice(result.message || 'Role submitted.');
+            setPreviewRole(null);
+          } catch (err) { setError(err.message); }
+          finally { setPreviewBusy(false); }
+        };
+
+        return (
+          <div className="modal-backdrop" role="dialog" aria-modal="true"
+               aria-labelledby="preview-title" onClick={() => setPreviewRole(null)}>
+            <section className="modal" style={{ width: 'min(100%, 580px)', maxHeight: '90vh', overflowY: 'auto' }}
+                     onClick={(e) => e.stopPropagation()}>
+              <button className="modal-close" onClick={() => setPreviewRole(null)} aria-label="Close">×</button>
+
+              <p className="eyebrow">Role details</p>
+              <h2 id="preview-title" style={{ margin: '4px 0 4px', fontSize: 22 }}>
+                {previewRole.title}
+              </h2>
+              <p className="muted" style={{ marginBottom: 16 }}>
+                {previewRole.organization} · {previewRole.location}
+                {' · '}<span style={{ textTransform: 'capitalize' }}>{previewRole.mode}</span>
+                {' · '}{previewRole.durationWeeks} weeks · {previewRole.credits} credits
+                {previewRole.stipend > 0 && ` · ₹${previewRole.stipend.toLocaleString('en-IN')}/mo`}
+              </p>
+
+              {/* Skills */}
+              <div style={{ marginBottom: 14 }}>
+                <p className="eyebrow" style={{ marginBottom: 6 }}>Required skills</p>
+                <div className="skill-chips">
+                  {previewRole.skills.map((s) => <span key={s}>{s}</span>)}
+                </div>
+              </div>
+
+              {/* Description / responsibilities */}
+              <div style={{ marginBottom: 16 }}>
+                <p className="eyebrow" style={{ marginBottom: 6 }}>Description &amp; responsibilities</p>
+                <p style={{ fontSize: 12, color: '#3a4e40', lineHeight: 1.7,
+                             padding: '10px 14px', background: '#f8faf6',
+                             borderRadius: 6, border: '1px solid #d9e8d0', margin: 0,
+                             whiteSpace: 'pre-wrap' }}>
+                  {previewRole.description}
+                </p>
+              </div>
+
+              {/* Duplicate warning */}
+              {alreadyPosted && (
+                <div style={{ padding: '10px 14px', marginBottom: 14, borderRadius: 6,
+                              background: '#fef9e8', border: '1px solid #f0d080',
+                              fontSize: 12, color: '#7a5500' }}>
+                  ⚠ You already have a posting for <strong>{previewRole.title}</strong>.
+                  Submitting again will create a new listing for the deadline you choose.
+                </div>
+              )}
+
+              {/* Verification gate */}
+              {!user.isVerifiedPartner ? (
+                <div style={{ padding: '12px 14px', borderRadius: 6,
+                              background: '#fff3f3', border: '1px solid #f3c9c0',
+                              fontSize: 12, color: '#943727', marginBottom: 14 }}>
+                  ✕ Your organisation must be verified before you can post roles.
+                  Visit your <a href="/partner" style={{ color: '#943727', fontWeight: 700 }}>Industry Workspace</a> to
+                  request verification.
+                </div>
+              ) : (
+                <>
+                  <label style={{ marginBottom: 14 }}>
+                    Application deadline
+                    <input
+                      type="date"
+                      required
+                      value={previewDeadline}
+                      min={new Date().toISOString().split('T')[0]}
+                      onChange={(e) => setPreviewDeadline(e.target.value)}
+                      style={{ marginTop: 6 }}
+                    />
+                  </label>
+                  <button
+                    className="button button-full"
+                    disabled={previewBusy || !previewDeadline}
+                    onClick={handlePost}>
+                    {previewBusy ? 'Posting…' : 'Post this role'}
+                  </button>
+                </>
+              )}
+            </section>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

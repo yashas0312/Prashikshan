@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -54,26 +54,6 @@ function Tick({ done, pct }) {
   );
 }
 
-// ─── YouTube IFrame API loader ─────────────────────────────────────────────
-// Loads the YT IFrame API script once per page lifecycle.
-function loadYTScript() {
-  if (window.YT && window.YT.Player) return Promise.resolve();
-  return new Promise((resolve) => {
-    if (document.getElementById('yt-iframe-api')) {
-      // Script tag already inserted — wait for it
-      const wait = setInterval(() => {
-        if (window.YT && window.YT.Player) { clearInterval(wait); resolve(); }
-      }, 100);
-      return;
-    }
-    window.onYouTubeIframeAPIReady = () => resolve();
-    const tag = document.createElement('script');
-    tag.id  = 'yt-iframe-api';
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.body.appendChild(tag);
-  });
-}
-
 // ─── Learning Player Modal ─────────────────────────────────────────────────
 function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
   const enrollmentId = enrollment?._id;
@@ -85,19 +65,17 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
   const [completing, setCompleting] = useState(false);
   const [certResult, setCertResult] = useState(null);
 
-  // watchedVideos from DB is the canonical source (no localStorage trust)
   const [watchedIds, setWatchedIds] = useState(
     () => new Set((enrollment?.watchedVideos || []).map((w) => w.videoId))
   );
-  // Per-video watch-percentage tracked locally by the YT player
-  const [watchPct, setWatchPct]   = useState({});
+  const [watchPct, setWatchPct] = useState({});
 
-  const playerRef    = useRef(null);  // YT.Player instance
-  const playerDivId  = 'yt-player-div';
-  const pollRef      = useRef(null);  // setInterval handle
-  const reportedRef  = useRef(new Set()); // videoIds already reported this session
+  const iframeRef   = useRef(null);
+  const pollRef     = useRef(null);
+  const reportedRef = useRef(new Set());
+  // track current video for postMessage polling
+  const activeVideoRef = useRef(null);
 
-  // ── Fetch video list ────────────────────────────────────────────────────
   useEffect(() => {
     setLoadingVids(true);
     api(`/courses/${course._id}/videos`)
@@ -106,109 +84,91 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
       .finally(() => setLoadingVids(false));
   }, [course._id]);
 
-  // ── Build/rebuild YT.Player when active video changes ──────────────────
-  const buildPlayer = useCallback((video) => {
-    if (!video) return;
-
-    // Tear down previous player + poll loop
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (playerRef.current) {
-      try { playerRef.current.destroy(); } catch (_) {}
-      playerRef.current = null;
-    }
-
-    loadYTScript().then(() => {
-      if (!document.getElementById(playerDivId)) return;
-
-      playerRef.current = new window.YT.Player(playerDivId, {
-        videoId: video.videoId,
-        playerVars: {
-          rel: 0, modestbranding: 1, enablejsapi: 1,
-          origin: window.location.origin,
-        },
-        events: {
-          onReady() { startPolling(video); },
-          onStateChange(e) {
-            // YT.PlayerState.PLAYING = 1
-            if (e.data === 1) startPolling(video);
-            else stopPolling();
-          },
-          onError() { stopPolling(); },
-        },
-      });
-    });
-  }, []); // eslint-disable-line
-
+  // Poll the iframe via postMessage every 2s to get currentTime
   function startPolling(video) {
     stopPolling();
-    pollRef.current = setInterval(() => tickPoll(video), 2000);
+    activeVideoRef.current = video;
+    pollRef.current = setInterval(() => {
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'getPlayerState', args: [] }),
+          '*'
+        );
+      }
+    }, 2000);
   }
+
   function stopPolling() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }
 
-  // Called every 2 s while the video is playing
-  function tickPoll(video) {
-    const p = playerRef.current;
-    if (!p || typeof p.getCurrentTime !== 'function') return;
+  // Listen for YT postMessage events to track watch time
+  useEffect(() => {
+    const onMessage = (evt) => {
+      let data;
+      try { data = typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data; }
+      catch { return; }
 
-    const current  = p.getCurrentTime();
-    const duration = p.getDuration();
-    if (!duration || duration <= 0) return;
+      if (data?.event !== 'infoDelivery' || !data.info) return;
+      const video = activeVideoRef.current;
+      if (!video) return;
 
-    const pct = (current / duration) * 100;
-    setWatchPct((prev) => ({ ...prev, [video.videoId]: Math.min(pct, 100) }));
+      const current  = data.info.currentTime;
+      const duration = data.info.duration;
+      if (!duration || duration <= 0 || current == null) return;
 
-    // ≥90% threshold — report to backend once per session
-    if (pct >= 90 && !reportedRef.current.has(video.videoId) && !watchedIds.has(video.videoId)) {
-      reportedRef.current.add(video.videoId); // optimistic dedup
-      stopPolling();
-      reportWatched(video, Math.round(current));
-    }
-  }
+      const pct = (current / duration) * 100;
+      setWatchPct((prev) => ({ ...prev, [video.videoId]: Math.min(pct, 100) }));
+
+      if (pct >= 90 && !reportedRef.current.has(video.videoId) && !watchedIds.has(video.videoId)) {
+        reportedRef.current.add(video.videoId);
+        stopPolling();
+        reportWatched(video, Math.round(current));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [watchedIds]); // eslint-disable-line
+
+  // Start polling when iframe loads a new video
+  const handleIframeLoad = (video) => {
+    startPolling(video);
+  };
 
   async function reportWatched(video, watchTimeSeconds) {
     if (!enrollmentId) return;
     try {
       const resp = await api(`/courses/enrollments/${enrollmentId}/track-video`, {
         method: 'POST',
-        body:   { videoId: video.videoId, watchTimeSeconds },
+        body: { videoId: video.videoId, watchTimeSeconds },
       });
-
       setWatchedIds((prev) => new Set([...prev, video.videoId]));
       onProgressUpdate(enrollmentId, resp.progress);
-
-      if (resp.completed) {
-        setCompleting(true);
-        setCertResult(resp);
-        setNotice('');
-      } else {
-        setNotice(`Module "${video.topic}" marked complete. ${resp.watchedCount}/${resp.totalVideos} done.`);
-      }
+      if (resp.completed) { setCompleting(true); setCertResult(resp); setNotice(''); }
+      else setNotice(`Module "${video.topic}" marked complete. ${resp.watchedCount}/${resp.totalVideos} done.`);
     } catch (e) {
-      // Non-fatal: remove from dedup set so player will retry on next poll start
       reportedRef.current.delete(video.videoId);
       console.warn('[Player] track-video error:', e.message);
     }
   }
 
-  // Rebuild player when active video changes
+  // Reset polling when active video changes
   useEffect(() => {
-    if (!loadingVids && videos.length) {
-      buildPlayer(videos[activeIdx]);
-    }
-    return () => { stopPolling(); };
-  }, [activeIdx, loadingVids, videos, buildPlayer]); // eslint-disable-line
+    stopPolling();
+    activeVideoRef.current = null;
+    // iframe will call handleIframeLoad on load
+  }, [activeIdx]);
 
-  // Cleanup on unmount
+  // Cleanup
+  useEffect(() => () => stopPolling(), []);
+
+  // Escape key
   useEffect(() => {
-    return () => {
-      stopPolling();
-      if (playerRef.current) { try { playerRef.current.destroy(); } catch (_) {} }
-    };
-  }, []);
+    const onKey = (e) => { if (e.key === 'Escape') { stopPolling(); onClose(); } };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
-  // ── Derived values ──────────────────────────────────────────────────────
   const totalVideos  = videos.length;
   const watchedCount = watchedIds.size;
   const progress     = totalVideos > 0 ? Math.round((watchedCount / totalVideos) * 100) : 0;
@@ -216,15 +176,36 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
   const lc           = levelColor(course.level);
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true"
-         aria-label={`Learning: ${course.title}`}>
-      <div style={{
-        position:'relative', width:'min(100%, 1020px)', maxHeight:'94vh',
-        background:'#fdfefb', borderRadius:10,
-        boxShadow:'0 30px 80px rgba(7,24,14,.32)',
-        overflow:'hidden', display:'flex', flexDirection:'column',
-      }}>
+    /* Backdrop — clicking it closes the modal */
+    <div
+      className="modal-backdrop"
+      role="dialog" aria-modal="true"
+      aria-label={`Learning: ${course.title}`}
+      style={{ alignItems: 'flex-start', paddingTop: '3vh' }}
+      onClick={onClose}
+    >
+      {/* Close button rendered OUTSIDE the modal box so the iframe can never intercept it */}
+      <button
+        onClick={(e) => { e.stopPropagation(); stopPolling(); onClose(); }}
+        aria-label="Close player"
+        style={{
+          position: 'fixed', top: 14, right: 18, zIndex: 9999,
+          border: 'none', background: 'rgba(255,255,255,0.92)',
+          borderRadius: '50%', width: 36, height: 36,
+          fontSize: 22, lineHeight: '34px', textAlign: 'center',
+          cursor: 'pointer', color: '#1c3a28', boxShadow: '0 2px 8px rgba(0,0,0,.18)',
+        }}
+      >×</button>
 
+      <div
+        style={{
+          position: 'relative', width: 'min(100%, 1020px)', maxHeight: '94vh',
+          background: '#fdfefb', borderRadius: 10,
+          boxShadow: '0 30px 80px rgba(7,24,14,.32)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* ── HEADER ── */}
         <div style={{
           display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -254,8 +235,6 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
             <span style={{ fontSize:11, fontWeight:700, color:'#387352' }}>
               {watchedCount}/{totalVideos} modules
             </span>
-            <button className="modal-close" onClick={onClose}
-                    aria-label="Close player" style={{ position:'static', fontSize:22 }}>×</button>
           </div>
         </div>
 
@@ -309,7 +288,7 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
             display:'flex', flexDirection:'column',
             padding:'18px 18px 14px', overflow:'auto',
           }}>
-            {/* Player container — YT IFrame API replaces this div */}
+            {/* Player container */}
             {loadingVids ? (
               <div style={{
                 aspectRatio:'16/9', background:'#e8f0e4', borderRadius:8,
@@ -322,11 +301,19 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
                 height:0, borderRadius:8, overflow:'hidden',
                 boxShadow:'0 4px 20px rgba(0,0,0,.12)',
               }}>
-                {/* YT IFrame API requires a plain div target — not an iframe element */}
-                <div id={playerDivId} style={{
-                  position:'absolute', top:0, left:0,
-                  width:'100%', height:'100%',
-                }}/>
+                <iframe
+                  ref={iframeRef}
+                  key={activeVideo.videoId}
+                  src={`https://www.youtube-nocookie.com/embed/${activeVideo.videoId}?enablejsapi=1&rel=0&modestbranding=1&origin=${encodeURIComponent(window.location.origin)}`}
+                  title={activeVideo.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  onLoad={() => handleIframeLoad(activeVideo)}
+                  style={{
+                    position:'absolute', top:0, left:0,
+                    width:'100%', height:'100%', border:'none',
+                  }}
+                />
               </div>
             ) : (
               <div style={{
@@ -477,6 +464,7 @@ function LearningPlayer({ course, enrollment, onClose, onProgressUpdate }) {
 // ─── Main Courses Page ─────────────────────────────────────────────────────
 export default function Courses() {
   const { user } = useAuth();
+  const location = useLocation();
 
   const [courses, setCourses]       = useState([]);
   const [enrollments, setEnrollments] = useState([]);
@@ -513,6 +501,22 @@ export default function Courses() {
 
   useEffect(() => { loadData(); }, []); // eslint-disable-line
 
+  // Auto-open player when navigated here with a specific courseId (from Dashboard "Learn" button).
+  // Use a ref so this fires only ONCE per navigation — not on every loadData re-render.
+  const autoOpenFiredRef = useRef(false);
+  useEffect(() => {
+    const openCourseId = location.state?.openCourseId;
+    if (!openCourseId || loading || courses.length === 0) return;
+    if (autoOpenFiredRef.current) return; // already fired — don't reopen after loadData
+    const course = courses.find((c) => String(c._id) === String(openCourseId));
+    if (course) {
+      autoOpenFiredRef.current = true;
+      const enrollment = enrollmentMap.get(String(openCourseId)) || null;
+      setPlayerCourse(course);
+      setPlayerEnrollment(enrollment);
+    }
+  }, [loading, courses, location.state?.openCourseId]); // eslint-disable-line
+
   const enroll = async (id, e) => {
     e.stopPropagation();
     setError(''); setNotice('');
@@ -535,7 +539,9 @@ export default function Courses() {
     );
   };
 
-  const shown = courses.filter((c) => filter === 'all' || c.level === filter);
+  const shown = filter === 'mine'
+    ? courses.filter((c) => enrollmentMap.has(String(c._id)))
+    : courses.filter((c) => filter === 'all' || c.level === filter);
 
   return (
     <div className="catalogue page-width">
@@ -569,6 +575,11 @@ export default function Courses() {
             {level}
           </button>
         ))}
+        <button
+          className={filter === 'mine' ? 'active' : ''}
+          onClick={() => setFilter('mine')}>
+          My Courses
+        </button>
       </div>
 
       {loading ? (
@@ -689,7 +700,6 @@ export default function Courses() {
           onClose={() => {
             setPlayerCourse(null);
             setPlayerEnrollment(null);
-            loadData();
           }}
           onProgressUpdate={handleProgressUpdate}
         />

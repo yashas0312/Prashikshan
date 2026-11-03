@@ -210,7 +210,7 @@ export default function Dashboard() {
   const { user, updateUser } = useAuth();
 
   const [data, setData] = useState({
-    courses: [], enrollments: [], applications: [], internships: [],
+    courses: [], assessmentCourses: [], enrollments: [], applications: [], internships: [],
   });
   const [analytics, setAnalytics] = useState({
     timeline: [], skillMatrix: [],
@@ -234,7 +234,7 @@ export default function Dashboard() {
     try {
       const [
         courseData, enrollmentData, applicationData, internshipData,
-        analyticsData, revisionData,
+        analyticsData, revisionData, assessmentCourseData,
       ] = await Promise.all([
         api('/courses/recommended'),
         api('/courses/me/enrollments'),
@@ -245,13 +245,15 @@ export default function Dashboard() {
           creditBreakdown: { total: 0 },
         })),
         api('/assessments/daily-revision').catch(() => null),
+        api('/courses/assessment-recommendations').catch(() => ({ courses: [] })),
       ]);
 
       setData({
-        courses:      courseData.courses      || [],
-        enrollments:  enrollmentData.enrollments || [],
-        applications: applicationData.applications || [],
-        internships:  internshipData.internships || [],
+        courses:          courseData.courses      || [],
+        assessmentCourses: assessmentCourseData.courses || [],
+        enrollments:      enrollmentData.enrollments || [],
+        applications:     applicationData.applications || [],
+        internships:      internshipData.internships || [],
       });
 
       if (analyticsData) setAnalytics(analyticsData);
@@ -270,14 +272,25 @@ export default function Dashboard() {
     setNotice(''); setError('');
     try {
       await api(`/courses/${courseId}/enroll`, { method: 'POST' });
+    } catch (e) {
+      if (e.status !== 409) { setError(e.message); return; }
+      // 409 = already enrolled — fall through and refresh
+    }
+    // Refresh enrollments so the course appears immediately in "Continue learning"
+    try {
+      const enrollData = await api('/courses/me/enrollments');
       setData((cur) => ({
         ...cur,
+        enrollments: enrollData.enrollments || [],
         courses: cur.courses.map((c) =>
           c._id === courseId ? { ...c, enrolled: true } : c
         ),
+        assessmentCourses: cur.assessmentCourses.map((c) =>
+          c._id === courseId ? { ...c, enrolled: true } : c
+        ),
       }));
-      setNotice('Course added to your learning plan.');
-    } catch (e) { setError(e.message); }
+    } catch (_) { /* non-critical — full reload on next visit */ }
+    setNotice('Course added to your learning plan.');
   };
 
   // ── Certificate completion callback ─────────────────────────────────────
@@ -529,10 +542,10 @@ export default function Dashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           {(analytics.skillMatrix?.length
             ? analytics.skillMatrix
-            : ['html','css','javascript','react','nodejs','python','mongodb','sql','git','dsa'].map((s) => {
-                const m = user.skillProfile?.find((sp) => sp.skill.toLowerCase() === s);
-                return { skill: s, level: m?.level || 'beginner', score: m?.score || 0 };
-              })
+            : (user.skillProfile?.length
+                ? user.skillProfile.map((sp) => ({ skill: sp.skill, level: sp.level || 'beginner', score: sp.score || 0 }))
+                : ['html','css','javascript','react','nodejs','python','mongodb','sql','git','dsa','java','cloud','os','dbms'].map((s) => ({ skill: s, level: 'beginner', score: 0 }))
+              )
           ).map((item) => {
             const ls = item.level === 'legend'
               ? { bg: '#e1f1df', color: '#1f663c', border: '#bfe0bc' }
@@ -566,6 +579,48 @@ export default function Dashboard() {
       {/* ── WORKSPACE LAYOUT: recommended + applications + sidebar ── */}
       <div className="workspace-layout">
         <div className="workspace-main">
+
+          {/* ASSESSMENT-BASED COURSE RECOMMENDATIONS */}
+          {data.assessmentCourses.length > 0 && (
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Based on your assessment results</p>
+                  <h2>Skill-Matched Courses</h2>
+                </div>
+                <Link to="/courses" className="text-action">Browse all <span>→</span></Link>
+              </div>
+              <div className="course-list">
+                {data.assessmentCourses.slice(0, 6).map((course) => (
+                  <article className="course-row" key={course._id}>
+                    <div className="course-code">{course.code.split('-')[0]}</div>
+                    <div>
+                      <span className="tag">{course.level}</span>
+                      <h3>{course.title}</h3>
+                      <p>{course.skills.join(' · ')}</p>
+                      {course.explainabilityTag && (
+                        <small style={{ display: 'block', marginTop: 3, color: '#387352',
+                                        fontWeight: 700, fontSize: '9.5px' }}>
+                          🎯 {course.explainabilityTag}
+                        </small>
+                      )}
+                    </div>
+                    <div className="course-meta">
+                      <span>{course.hours} hrs</span>
+                      <b>{course.credits} cr</b>
+                    </div>
+                    {course.enrolled ? (
+                      <span className="status status-active">Enrolled</span>
+                    ) : (
+                      <button className="button button-small" onClick={() => enroll(course._id)}>
+                        Add course
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* RECOMMENDED COURSES */}
           <section className="panel">
@@ -760,17 +815,27 @@ export default function Dashboard() {
                     )}
                   </div>
                 ) : (
-                  <button
-                    className="button button-small"
-                    style={{
-                      background: isSuspicious ? 'transparent' : undefined,
-                      color: isSuspicious ? '#946914' : undefined,
-                      borderColor: isSuspicious ? '#e0b030' : undefined,
-                      fontSize: 10,
-                    }}
-                    onClick={() => setCertEnrollment(enrollment)}>
-                    {isSuspicious ? '⚠ Claim Credits' : 'Submit Certificate'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <Link
+                      to="/courses"
+                      state={{ openCourseId: enrollment.course?._id }}
+                      className="button button-small button-outline"
+                      style={{ textDecoration: 'none', fontSize: 10 }}
+                    >
+                      Learn ▶
+                    </Link>
+                    <button
+                      className="button button-small"
+                      style={{
+                        background: isSuspicious ? 'transparent' : undefined,
+                        color: isSuspicious ? '#946914' : undefined,
+                        borderColor: isSuspicious ? '#e0b030' : undefined,
+                        fontSize: 10,
+                      }}
+                      onClick={() => setCertEnrollment(enrollment)}>
+                      {isSuspicious ? '⚠ Claim Credits' : 'Submit Certificate'}
+                    </button>
+                  </div>
                 )}
               </div>
             );

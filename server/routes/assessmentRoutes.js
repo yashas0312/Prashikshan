@@ -7,17 +7,45 @@ const { getMixedQuiz } = require('../services/quizService');
 const { generateQuizForSkills } = require('../services/geminiService');
 const { predictSkillLevels, localFallbackTier } = require('../services/mlClient');
 const { requireAuth, allowRoles } = require('../lib/auth');
+const { parseResume } = require('../services/resumeParser');
+const multer = require('multer');
 
 const router = express.Router();
 const normalizeSkill = (skill) => String(skill || '').trim().toLowerCase();
+
+// Multer: memory storage, 5 MB limit, PDF/DOCX only
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    const allowed = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+    ];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only PDF and DOCX files are accepted.'));
+  },
+});
 
 function getTodayString() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// POST /api/assessments/parse-resume
+router.post('/parse-resume', requireAuth, allowRoles('student'), upload.single('resume'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Please upload a PDF or DOCX resume file.' });
+    const { skills } = await parseResume(req.file.buffer, req.file.mimetype);
+    return res.json({ skills });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/start', requireAuth, allowRoles('student'), async (req, res, next) => {
   try {
-    const skills = [...new Set((req.body.skills || []).map(normalizeSkill).filter(Boolean))].slice(0, 5);
+    const skills = [...new Set((req.body.skills || []).map(normalizeSkill).filter(Boolean))].slice(0, 7);
     if (!skills.length) return res.status(400).json({ error: 'Select at least one skill to begin the assessment.' });
     const questions = skills.flatMap((skill) => getMixedQuiz(skill).map((question) => ({ skill, prompt: question.question, options: question.options, answer: question.answer })));
     if (!questions.length) return res.status(400).json({ error: 'Questions are not available for the selected skills.' });
@@ -111,43 +139,62 @@ router.get('/daily-revision', requireAuth, allowRoles('student'), async (req, re
       });
     }
 
-    // Generate fresh daily questions based on active course enrollments
-    const enrollments = await Enrollment.find({ student: req.auth.sub, status: 'enrolled' }).populate('course');
-    const activeCourses = enrollments.map(e => e.course).filter(Boolean);
-    const courseSkills = [...new Set(activeCourses.flatMap(c => (c.skills || []).map(normalizeSkill)))].filter(Boolean);
+    // Generate fresh daily questions based on the user's assessed skills and proficiency levels
+    const user = await User.findById(req.auth.sub);
 
-    const targetSkills = courseSkills.length ? courseSkills.slice(0, 5) : ['javascript', 'react', 'python', 'html', 'css'];
+    // Use skills from the user's skill profile (set by the most recent assessment).
+    // Fall back to a default set only if no assessment has been completed yet.
+    let assessedSkills = (user.skillProfile || [])
+      .filter(sp => sp.skill && sp.level)
+      .map(sp => ({ skill: normalizeSkill(sp.skill), level: sp.level }));
 
+    if (!assessedSkills.length) {
+      assessedSkills = ['javascript', 'react', 'python', 'html', 'css']
+        .map(s => ({ skill: s, level: 'beginner' }));
+    }
+
+    // Build 5 questions distributed across assessed skills.
+    // Pick questions matching each skill's assessed proficiency level.
     let questions = [];
-    try {
-      const generated = await generateQuizForSkills(targetSkills.slice(0, 3), 'intermediate');
-      for (const [skill, qList] of Object.entries(generated)) {
-        if (Array.isArray(qList)) {
-          qList.forEach(q => questions.push({ skill: normalizeSkill(skill), prompt: q.question, options: q.options, answer: q.answer }));
+    const skillCount = assessedSkills.length;
+
+    for (let i = 0; i < assessedSkills.length && questions.length < 5; i++) {
+      const { skill, level } = assessedSkills[i];
+      const local = getMixedQuiz(skill); // already returns 1 per level tier (3 total)
+      if (local.length > 0) {
+        // Pick one question; rotate through pool to spread coverage
+        const pick = local[i % local.length];
+        questions.push({ skill, prompt: pick.question, options: pick.options, answer: pick.answer });
+      }
+    }
+
+    // If we still need more questions to reach 5, cycle through assessed skills again
+    let cycle = 0;
+    while (questions.length < 5 && assessedSkills.length > 0) {
+      const { skill } = assessedSkills[cycle % skillCount];
+      const local = getMixedQuiz(skill);
+      if (local.length > 0) {
+        const pick = local[Math.floor(Math.random() * local.length)];
+        // avoid exact duplicate prompts
+        if (!questions.find(q => q.prompt === pick.question)) {
+          questions.push({ skill, prompt: pick.question, options: pick.options, answer: pick.answer });
         }
       }
-    } catch (e) {
-      console.warn('Gemini daily revision generation fallback:', e.message);
+      cycle++;
+      if (cycle > skillCount * 10) break; // safety exit
     }
 
-    if (questions.length < 5) {
-      for (const skill of targetSkills) {
-        if (questions.length >= 5) break;
-        const local = getMixedQuiz(skill);
-        local.forEach(q => {
-          if (questions.length < 5) {
-            questions.push({ skill, prompt: q.question, options: q.options, answer: q.answer });
-          }
-        });
-      }
-    }
     questions = questions.slice(0, 5);
+
+    // Collect course IDs for enrolled courses (kept for DailyRevision schema compatibility)
+    const enrollments = await Enrollment.find({ student: req.auth.sub, status: 'enrolled' }).select('course');
+    const activeCourseIds = enrollments.map(e => e.course).filter(Boolean);
 
     try {
       revision = await DailyRevision.create({
         student: req.auth.sub,
         date: today,
-        courses: activeCourses.map(c => c._id),
+        courses: activeCourseIds,
         questions,
         completed: false
       });
@@ -253,19 +300,31 @@ router.get('/analytics/me', requireAuth, allowRoles('student'), async (req, res,
 
     const timeline = Array.from(pointsMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Master Skill List (10 platform skills)
-    const allPlatformSkills = ['html', 'css', 'javascript', 'react', 'nodejs', 'python', 'mongodb', 'sql', 'git', 'dsa'];
+    // Skill Matrix — show ALL skills the user has actually been assessed on,
+    // plus any from the standard platform list that haven't been assessed yet.
+    const allPlatformSkills = ['html', 'css', 'javascript', 'react', 'nodejs', 'python', 'mongodb', 'sql', 'git', 'dsa', 'java', 'cloud', 'os', 'dbms'];
     const userProfileMap = new Map((user.skillProfile || []).map(sp => [sp.skill.toLowerCase(), sp]));
 
-    const skillMatrix = allPlatformSkills.map(skill => {
-      const existing = userProfileMap.get(skill);
-      return {
-        skill,
-        level: existing?.level || 'beginner',
-        score: existing?.score || 0,
-        assessedAt: existing?.assessedAt || null
-      };
-    });
+    // Start with all assessed skills (so nothing the user tested is missing)
+    const assessedSkillKeys = [...userProfileMap.keys()];
+    const allSkillKeys = [...new Set([...assessedSkillKeys, ...allPlatformSkills])];
+
+    const skillMatrix = allSkillKeys
+      .filter(skill => {
+        // Only include platform skills OR skills the user actually assessed
+        return allPlatformSkills.includes(skill) || userProfileMap.has(skill);
+      })
+      .map(skill => {
+        const existing = userProfileMap.get(skill);
+        return {
+          skill,
+          level: existing?.level || 'beginner',
+          score: existing?.score || 0,
+          assessedAt: existing?.assessedAt || null
+        };
+      })
+      // Put assessed skills first
+      .sort((a, b) => (b.assessedAt ? 1 : 0) - (a.assessedAt ? 1 : 0));
 
     // Credit Breakdown by Source
     const creditBreakdown = {

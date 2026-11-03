@@ -24,6 +24,7 @@ const courseSchema = new mongoose.Schema({
   hours:    { type: Number, min: 1, required: true },
   credits:  { type: Number, min: 1, max: 12, required: true },
   provider: { type: String, default: 'Prashikshan Learning Hub' },
+  courseUrl: { type: String, default: '' },
   modules:  { type: [String], default: [] },          // legacy text list kept for compat
   videos:   { type: [videoSchema], default: [] },     // NEW: structured video library
   published:{ type: Boolean, default: true },

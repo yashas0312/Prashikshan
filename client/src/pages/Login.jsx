@@ -12,7 +12,24 @@ export default function Login() {
   const location = useLocation();
   const submit = async (event) => {
     event.preventDefault(); setError(''); setBusy(true);
-    try { const session = await api('/auth/login', { method: 'POST', body: form }); authenticate(session); navigate(location.state?.from || '/dashboard', { replace: true }); }
+    try {
+      const session = await api('/auth/login', { method: 'POST', body: form });
+      authenticate(session);
+      // Redirect each role to their correct home
+      let dest;
+      if (session.user?.role === 'coordinator') {
+        dest = '/coordination';
+      } else if (session.user?.role === 'partner') {
+        dest = session.user?.isProfileComplete
+          ? (location.state?.from || '/partner')
+          : '/partner-setup';
+      } else if (session.user?.role === 'student' && !session.user?.isAssessed) {
+        dest = '/industry-awareness';
+      } else {
+        dest = location.state?.from || '/dashboard';
+      }
+      navigate(dest, { replace: true });
+    }
     catch (requestError) { setError(requestError.message); }
     finally { setBusy(false); }
   };

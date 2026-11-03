@@ -61,7 +61,7 @@ const CURATED_LIBRARY = {
   'BACK-220': [
     { id:1, title:'Node.js Crash Course',                                   videoId:'fBNz5xF-Kx4', channel:'Traversy Media',      duration:'1h 30m', durationSeconds:5400,  topic:'Node.js Foundations' },
     { id:2, title:'Express JS Crash Course',                                videoId:'L72fhGm1tfE', channel:'Traversy Media',      duration:'55m',    durationSeconds:3300,  topic:'REST API Design' },
-    { id:3, title:'MongoDB Crash Course',                                   videoId:'-56x56UppqQ', channel:'Traversy Media',      duration:'1h 10m', durationSeconds:4200,  topic:'Data Modelling' },
+    { id:3, title:'MongoDB Crash Course',                                   videoId:'pWbMFrVA3mc', channel:'Traversy Media',      duration:'1h 10m', durationSeconds:4200,  topic:'Data Modelling' },
     { id:4, title:'Mongoose Crash Course – with Node & Express',            videoId:'DZBGEVgL2eM', channel:'Traversy Media',      duration:'45m',    durationSeconds:2700,  topic:'Mongoose & ODM' },
     { id:5, title:'Node.js API Authentication with JWT',                    videoId:'mbsmsi7l3r4', channel:'Traversy Media',      duration:'1h 00m', durationSeconds:3600,  topic:'Security & Auth' },
     { id:6, title:'REST API Design Best Practices',                         videoId:'_7UQPve99r4', channel:'Web Dev Simplified',  duration:'20m',    durationSeconds:1200,  topic:'API Standards' },
@@ -69,7 +69,7 @@ const CURATED_LIBRARY = {
   ],
 
   'AI-315': [
-    { id:1, title:'Machine Learning with Python – Full Course',             videoId:'NWONeJKn6kc', channel:'freeCodeCamp',        duration:'9h 59m', durationSeconds:35940, topic:'ML Foundations' },
+    { id:1, title:'Machine Learning with Python – Full Course',             videoId:'i_LwzRVP7bg', channel:'freeCodeCamp',        duration:'9h 59m', durationSeconds:35940, topic:'ML Foundations' },
     { id:2, title:'Scikit-Learn Crash Course',                              videoId:'pqNCD_5r0IU', channel:'freeCodeCamp',        duration:'2h 09m', durationSeconds:7740,  topic:'Feature Design & Sklearn' },
     { id:3, title:'Random Forest Algorithm Explained',                      videoId:'J4Wdy0Wc_xQ', channel:'StatQuest',           duration:'17m',    durationSeconds:1020,  topic:'Model Selection' },
     { id:4, title:'Machine Learning – Model Evaluation Metrics',            videoId:'LbX4X71-TFI', channel:'Krish Naik',          duration:'45m',    durationSeconds:2700,  topic:'Model Evaluation' },
@@ -206,7 +206,7 @@ const CURATED_LIBRARY = {
     { id:2, title:'HTML & CSS Full Course – Beginner to Pro',               videoId:'mU6anWqZJcc', channel:'SuperSimpleDev',       duration:'6h 31m', durationSeconds:23460, topic:'HTML & CSS' },
     { id:3, title:'JavaScript Full Course',                                 videoId:'PkZNo7MFNFg', channel:'freeCodeCamp',        duration:'3h 26m', durationSeconds:12360, topic:'JavaScript' },
     { id:4, title:'React Full Course',                                      videoId:'bMknfKXIFA8', channel:'freeCodeCamp',        duration:'4h 01m', durationSeconds:14460, topic:'React' },
-    { id:5, title:'Node.js Full Course',                                    videoId:'f2EqECiTBL8', channel:'freeCodeCamp',        duration:'7h 40m', durationSeconds:27600, topic:'Node.js & Express' },
+    { id:5, title:'Node.js Full Course',                                    videoId:'Oe421EPjeBE', channel:'freeCodeCamp',        duration:'7h 40m', durationSeconds:27600, topic:'Node.js & Express' },
     { id:6, title:'Full-Stack Web App with MERN',                           videoId:'7CqJlxBYj-M', channel:'Traversy Media',       duration:'1h 00m', durationSeconds:3600,  topic:'Full-Stack MERN' },
     { id:7, title:'Responsive Web Design Certification – Full Course',      videoId:'srvUrASNj0s', channel:'freeCodeCamp',        duration:'4h 03m', durationSeconds:14580, topic:'Responsive Design' },
   ],
@@ -320,6 +320,33 @@ const CURATED_LIBRARY = {
     { id:6, title:'LinkedIn Profile Optimization for Developers',           videoId:'UY_pKXy6oec', channel:'Traversy Media',       duration:'23m',    durationSeconds:1380,  topic:'LinkedIn & Networking' },
     { id:7, title:'System Design Interview – How to Approach',              videoId:'0163cssT0-E', channel:'Exponent',             duration:'20m',    durationSeconds:1200,  topic:'System Design Interviews' },
   ],
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  NEW SUBJECT COURSES — Java, Cloud, OS, DBMS
+  // ══════════════════════════════════════════════════════════════════════
+
+  // CPP-120 also covers Java — videos already included above via CPP-120
+  // Adding a dedicated Java-focused entry reachable from skill tag 'java'
+  'JAVA-290': [
+    { id:1, title:'Java Full Course for Beginners',                         videoId:'GoXwIVyNvX0', channel:'Programming w/ Mosh', duration:'2h 30m', durationSeconds:9000,  topic:'Java Fundamentals' },
+    { id:2, title:'Java OOP – Full Tutorial',                               videoId:'a199g9zqQfY', channel:'Amigoscode',           duration:'30m',    durationSeconds:1800,  topic:'OOP in Java' },
+    { id:3, title:'Java Collections Framework',                             videoId:'GdAon80-0KA', channel:'Amigoscode',           duration:'38m',    durationSeconds:2280,  topic:'Collections & Generics' },
+    { id:4, title:'Java Exception Handling',                                videoId:'1XAfapkBQjk', channel:'Programming w/ Mosh', duration:'30m',    durationSeconds:1800,  topic:'Exceptions & Error Handling' },
+    { id:5, title:'Java Multithreading & Concurrency',                      videoId:'r_MbozD32eo', channel:'Amigoscode',           duration:'52m',    durationSeconds:3120,  topic:'Threads & Concurrency' },
+    { id:6, title:'Spring Boot Tutorial for Beginners',                     videoId:'9SGDpanrc8U', channel:'Amigoscode',           duration:'2h 25m', durationSeconds:8700,  topic:'Spring Boot & REST APIs' },
+    { id:7, title:'Java Design Patterns – Full Course',                     videoId:'v9ejT8FO-7I', channel:'freeCodeCamp',        duration:'1h 52m', durationSeconds:6720,  topic:'Design Patterns in Java' },
+  ],
+
+  // CLOUD-225 already exists above; adding a second entry for the 'cloud' skill tag
+  'CLOUD-290': [
+    { id:1, title:'Cloud Computing Full Course',                            videoId:'M988_fsOSWo', channel:'Simplilearn',          duration:'11h',    durationSeconds:39600, topic:'Cloud Fundamentals' },
+    { id:2, title:'AWS Certified Cloud Practitioner – Full Course',         videoId:'SOTamWNgDKc', channel:'freeCodeCamp',        duration:'13h 58m',durationSeconds:50280, topic:'AWS Essentials' },
+    { id:3, title:'What is Cloud Computing?',                               videoId:'M988_fsOSWo', channel:'Simplilearn',          duration:'11h',    durationSeconds:3600,  topic:'Cloud Service Models' },
+    { id:4, title:'Serverless Computing Explained',                         videoId:'vxJobGtqKVM', channel:'IBM Technology',       duration:'4m',     durationSeconds:240,   topic:'Serverless & FaaS' },
+    { id:5, title:'Terraform Full Course',                                  videoId:'SLB_c_ayRMo', channel:'freeCodeCamp',        duration:'2h 30m', durationSeconds:9000,  topic:'Infrastructure as Code' },
+    { id:6, title:'Docker and Kubernetes – Full Course',                    videoId:'Wf2eSG3owoA', channel:'freeCodeCamp',        duration:'4h 20m', durationSeconds:15600, topic:'Containers & Orchestration' },
+    { id:7, title:'Cloud Security Tutorial',                                videoId:'d_QLFRt0qdg', channel:'Simplilearn',          duration:'45m',    durationSeconds:2700,  topic:'Cloud Security' },
+  ],
 };
 
 /**
@@ -337,10 +364,14 @@ function getCourseVideos(courseCode, skills = []) {
     react:      { title:'React Full Course',            videoId:'bMknfKXIFA8', durationSeconds:14460 },
     nodejs:     { title:'Node.js Full Course',          videoId:'fBNz5xF-Kx4', durationSeconds:5400  },
     python:     { title:'Python Full Course',           videoId:'_uQrJ0TkZlc', durationSeconds:22440 },
-    mongodb:    { title:'MongoDB Crash Course',         videoId:'-56x56UppqQ', durationSeconds:4200  },
+    mongodb:    { title:'MongoDB Crash Course',         videoId:'pWbMFrVA3mc', durationSeconds:4200  },
     sql:        { title:'SQL Full Course',              videoId:'HXV3zeQKqGY', durationSeconds:15600 },
     git:        { title:'Git & GitHub Course',          videoId:'RGOj5yH7evk', durationSeconds:4080  },
     dsa:        { title:'DSA Full Course',              videoId:'8hly31xKli0', durationSeconds:30360 },
+    java:       { title:'Java Full Course',             videoId:'GoXwIVyNvX0', durationSeconds:9000  },
+    cloud:      { title:'Cloud Computing Full Course',  videoId:'M988_fsOSWo', durationSeconds:39600 },
+    os:         { title:'Operating Systems Full Course',videoId:'mXw9ruZaxKs', durationSeconds:36000 },
+    dbms:       { title:'DBMS Full Course',             videoId:'6Iu45VZZoBo', durationSeconds:36000 },
   };
 
   return (skills.length ? skills : ['javascript']).slice(0, 7).map((skill, i) => {

@@ -30,6 +30,14 @@ const userSchema = new mongoose.Schema({
   credits: { type: [creditRecordSchema], default: [] },
   isAssessed: { type: Boolean, default: false },
   isVerifiedPartner: { type: Boolean, default: false },
+  verificationRequested: { type: Boolean, default: false },
+  // Partner-specific profile fields (collected on first login)
+  employeeId:     { type: String, trim: true, default: '' },
+  companyEmail:   { type: String, trim: true, lowercase: true, default: '' },
+  jobTitle:       { type: String, trim: true, default: '' },
+  contactNumber:  { type: String, trim: true, default: '' },
+  companyAddress: { type: String, trim: true, default: '' },
+  isProfileComplete: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
