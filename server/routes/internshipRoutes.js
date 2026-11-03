@@ -46,40 +46,36 @@ router.get('/', async (req, res, next) => {
 
 router.get('/partners/quadrant', async (req, res, next) => {
   try {
-    const partners = await User.find({ role: 'partner' }).select('organization bio department isVerifiedPartner createdAt');
+    // Only show verified partners in the quadrant — unverified companies are not yet visible to students
+    const partners = await User.find({ role: 'partner', isVerifiedPartner: true }).select('organization bio department isVerifiedPartner createdAt');
     const internships = await Internship.find({ status: 'published', verified: true });
     const applications = await Application.find({ status: { $in: ['accepted', 'in-progress', 'completed'] } });
 
     const orgStats = new Map();
 
     for (const partner of partners) {
-      if (!partner.organization) continue;
-      orgStats.set(partner.organization, {
-        partnerId: partner._id,
-        organization: partner.organization,
-        isVerified: partner.isVerifiedPartner,
-        activeInternships: 0,
-        totalCreditsOffered: 0,
-        completedInternships: 0,
-        avgStudentGrade: 88,
-        totalApplicantsHired: 0,
-      });
+      if (!partner.organization?.trim()) continue;
+      // Use organization as key; last-write wins for duplicate org names across accounts
+      if (!orgStats.has(partner.organization)) {
+        orgStats.set(partner.organization, {
+          partnerId: partner._id,
+          organization: partner.organization,
+          isVerified: partner.isVerifiedPartner,
+          activeInternships: 0,
+          totalCreditsOffered: 0,
+          completedInternships: 0,
+          avgStudentGrade: 88,
+          totalApplicantsHired: 0,
+        });
+      }
     }
 
     for (const internship of internships) {
-      const stats = orgStats.get(internship.organization) || {
-        partnerId: internship.postedBy,
-        organization: internship.organization,
-        isVerified: true,
-        activeInternships: 0,
-        totalCreditsOffered: 0,
-        completedInternships: 0,
-        avgStudentGrade: 88,
-        totalApplicantsHired: 0,
-      };
+      // Only add org-level entry if it already exists (verified partner); skip orphaned internships
+      if (!orgStats.has(internship.organization)) continue;
+      const stats = orgStats.get(internship.organization);
       stats.activeInternships += 1;
       stats.totalCreditsOffered += (internship.credits || 0);
-      orgStats.set(internship.organization, stats);
     }
 
     for (const app of applications) {

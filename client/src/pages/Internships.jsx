@@ -123,8 +123,23 @@ export default function Internships() {
 
   // Partner — role preview modal (for "Post a Role" on listing cards)
   const [previewRole, setPreviewRole] = useState(null); // internship object from listings
-  const [previewDeadline, setPreviewDeadline] = useState('');
+  const [previewOffer, setPreviewOffer] = useState({}); // editable offer customizations
   const [previewBusy, setPreviewBusy] = useState(false);
+  const setOffer = (k, v) => setPreviewOffer((o) => ({ ...o, [k]: v }));
+
+  const openPreview = (item) => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    setPreviewRole(item);
+    setPreviewOffer({
+      location:     item.location    || '',
+      mode:         item.mode        || 'remote',
+      stipend:      item.stipend     ?? 0,
+      durationWeeks: item.durationWeeks ?? 12,
+      capacity:     item.capacity    ?? 1,
+      deadline:     d.toISOString().split('T')[0],
+    });
+  };
   // Partner's own posted internships (for filter + duplicate check)
   const [myPostedRoles, setMyPostedRoles] = useState([]);
   // Filter by partner's own role title (replaces "applied" filter)
@@ -213,13 +228,8 @@ export default function Internships() {
   });
 
   // ── Fallback demo data for quadrant ──────────────────────────────────────
-  const displayPartners = partnersQuadrant.length ? partnersQuadrant : [
-    { organization: 'TechCorp India',      x: 88, y: 82, quadrant: 'Leaders',       activeInternships: 4, totalCreditsOffered: 16, totalApplicantsHired: 12, avgStudentGrade: 92 },
-    { organization: 'InnoLabs Global',     x: 82, y: 70, quadrant: 'Leaders',       activeInternships: 3, totalCreditsOffered: 14, totalApplicantsHired: 7,  avgStudentGrade: 95 },
-    { organization: 'ScaleShift Systems',  x: 42, y: 78, quadrant: 'Challengers',   activeInternships: 5, totalCreditsOffered: 20, totalApplicantsHired: 18, avgStudentGrade: 80 },
-    { organization: 'ByteCraft Solutions', x: 55, y: 38, quadrant: 'Niche Players', activeInternships: 2, totalCreditsOffered: 16, totalApplicantsHired: 4,  avgStudentGrade: 85 },
-    { organization: 'Prashikshan Demo',    x: 76, y: 42, quadrant: 'Visionaries',   activeInternships: 1, totalCreditsOffered: 4,  totalApplicantsHired: 3,  avgStudentGrade: 88 },
-  ];
+  // Use live backend data only; show an empty-state message if no verified partners yet.
+  const displayPartners = partnersQuadrant;
 
   const apply = async () => {
     setResumeError('');
@@ -650,13 +660,7 @@ export default function Internships() {
                     ) : user?.role === 'partner' ? (
                       <button
                         className="button button-small button-outline"
-                        onClick={() => {
-                          setPreviewRole(item);
-                          // Default deadline 30 days from today
-                          const d = new Date();
-                          d.setDate(d.getDate() + 30);
-                          setPreviewDeadline(d.toISOString().split('T')[0]);
-                        }}>
+                        onClick={() => openPreview(item)}>
                         Post a Role
                       </button>
                     ) : (
@@ -743,6 +747,16 @@ export default function Internships() {
                 ))}
               </div>
 
+              {/* Partner nodes */}
+              {displayPartners.length === 0 && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex',
+                              alignItems: 'center', justifyContent: 'center',
+                              flexDirection: 'column', gap: 8, color: '#7a8a7c' }}>
+                  <span style={{ fontSize: 32 }}>🏢</span>
+                  <strong style={{ fontSize: 13 }}>No verified partners yet.</strong>
+                  <small>Companies appear here once a coordinator verifies their account.</small>
+                </div>
+              )}
               {/* Partner nodes */}
               {displayPartners.map((partner, idx) => {
                 const leftPct   = Math.max(12, Math.min(86, partner.x));
@@ -1035,25 +1049,24 @@ export default function Internships() {
         );
 
         const handlePost = async () => {
-          if (!previewDeadline) return;
+          if (!previewOffer.deadline) return;
           setError(''); setPreviewBusy(true);
           try {
             const result = await api('/internships', {
               method: 'POST',
               body: {
-                title: previewRole.title,
-                description: previewRole.description,
-                skills: previewRole.skills,
-                location: previewRole.location,
-                mode: previewRole.mode,
-                durationWeeks: previewRole.durationWeeks,
-                stipend: previewRole.stipend ?? 0,
-                credits: previewRole.credits,
-                capacity: previewRole.capacity ?? 1,
-                deadline: previewDeadline,
+                title:        previewRole.title,
+                description:  previewRole.description,
+                skills:       previewRole.skills,
+                location:     previewOffer.location,
+                mode:         previewOffer.mode,
+                durationWeeks: Number(previewOffer.durationWeeks),
+                stipend:      Number(previewOffer.stipend),
+                credits:      previewRole.credits,
+                capacity:     Number(previewOffer.capacity),
+                deadline:     previewOffer.deadline,
               },
             });
-            // Refresh partner's posted roles
             const myRolesData = await api('/internships/mine').catch(() => ({ internships: [] }));
             setMyPostedRoles(myRolesData.internships || []);
             setNotice(result.message || 'Role submitted.');
@@ -1065,75 +1078,106 @@ export default function Internships() {
         return (
           <div className="modal-backdrop" role="dialog" aria-modal="true"
                aria-labelledby="preview-title" onClick={() => setPreviewRole(null)}>
-            <section className="modal" style={{ width: 'min(100%, 580px)', maxHeight: '90vh', overflowY: 'auto' }}
+            <section className="modal" style={{ width: 'min(100%, 600px)', maxHeight: '92vh', overflowY: 'auto' }}
                      onClick={(e) => e.stopPropagation()}>
               <button className="modal-close" onClick={() => setPreviewRole(null)} aria-label="Close">×</button>
 
-              <p className="eyebrow">Role details</p>
-              <h2 id="preview-title" style={{ margin: '4px 0 4px', fontSize: 22 }}>
+              <p className="eyebrow">Post this role</p>
+              <h2 id="preview-title" style={{ margin: '4px 0 2px', fontSize: 22 }}>
                 {previewRole.title}
               </h2>
-              <p className="muted" style={{ marginBottom: 16 }}>
-                {previewRole.organization} · {previewRole.location}
-                {' · '}<span style={{ textTransform: 'capitalize' }}>{previewRole.mode}</span>
-                {' · '}{previewRole.durationWeeks} weeks · {previewRole.credits} credits
-                {previewRole.stipend > 0 && ` · ₹${previewRole.stipend.toLocaleString('en-IN')}/mo`}
+              <p className="muted" style={{ marginBottom: 14 }}>
+                Customise the offer details before submitting. Title, description, skills and credits come from the role definition.
               </p>
 
               {/* Skills */}
-              <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 12 }}>
                 <p className="eyebrow" style={{ marginBottom: 6 }}>Required skills</p>
                 <div className="skill-chips">
                   {previewRole.skills.map((s) => <span key={s}>{s}</span>)}
                 </div>
               </div>
 
-              {/* Description / responsibilities */}
+              {/* Description */}
               <div style={{ marginBottom: 16 }}>
                 <p className="eyebrow" style={{ marginBottom: 6 }}>Description &amp; responsibilities</p>
                 <p style={{ fontSize: 12, color: '#3a4e40', lineHeight: 1.7,
                              padding: '10px 14px', background: '#f8faf6',
                              borderRadius: 6, border: '1px solid #d9e8d0', margin: 0,
-                             whiteSpace: 'pre-wrap' }}>
+                             whiteSpace: 'pre-wrap', maxHeight: 120, overflowY: 'auto' }}>
                   {previewRole.description}
                 </p>
               </div>
 
-              {/* Duplicate warning */}
               {alreadyPosted && (
                 <div style={{ padding: '10px 14px', marginBottom: 14, borderRadius: 6,
                               background: '#fef9e8', border: '1px solid #f0d080',
                               fontSize: 12, color: '#7a5500' }}>
                   ⚠ You already have a posting for <strong>{previewRole.title}</strong>.
-                  Submitting again will create a new listing for the deadline you choose.
+                  Submitting will create a new listing with the deadline you choose.
                 </div>
               )}
 
-              {/* Verification gate */}
               {!user.isVerifiedPartner ? (
                 <div style={{ padding: '12px 14px', borderRadius: 6,
                               background: '#fff3f3', border: '1px solid #f3c9c0',
-                              fontSize: 12, color: '#943727', marginBottom: 14 }}>
+                              fontSize: 12, color: '#943727' }}>
                   ✕ Your organisation must be verified before you can post roles.
                   Visit your <a href="/partner" style={{ color: '#943727', fontWeight: 700 }}>Industry Workspace</a> to
                   request verification.
                 </div>
               ) : (
                 <>
-                  <label style={{ marginBottom: 14 }}>
-                    Application deadline
-                    <input
-                      type="date"
-                      required
-                      value={previewDeadline}
-                      min={new Date().toISOString().split('T')[0]}
-                      onChange={(e) => setPreviewDeadline(e.target.value)}
-                      style={{ marginTop: 6 }}
-                    />
-                  </label>
+                  {/* Editable offer fields */}
+                  <div style={{ borderTop: '1px solid #e4ede0', paddingTop: 14, marginTop: 4 }}>
+                    <p className="eyebrow" style={{ marginBottom: 12 }}>Customise your offer</p>
+
+                    <div className="field-grid">
+                      <label>Location
+                        <input required value={previewOffer.location}
+                               onChange={(e) => setOffer('location', e.target.value)}
+                               placeholder="Remote or city" />
+                      </label>
+                      <label>Work mode
+                        <select value={previewOffer.mode} onChange={(e) => setOffer('mode', e.target.value)}>
+                          <option value="remote">Remote</option>
+                          <option value="hybrid">Hybrid</option>
+                          <option value="onsite">On-site</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="field-grid three">
+                      <label>Duration (weeks)
+                        <input type="number" min="1" max="104"
+                               value={previewOffer.durationWeeks}
+                               onChange={(e) => setOffer('durationWeeks', e.target.value)} />
+                      </label>
+                      <label>Monthly stipend (₹)
+                        <input type="number" min="0"
+                               value={previewOffer.stipend}
+                               onChange={(e) => setOffer('stipend', e.target.value)} />
+                      </label>
+                      <label>Openings
+                        <input type="number" min="1"
+                               value={previewOffer.capacity}
+                               onChange={(e) => setOffer('capacity', e.target.value)} />
+                      </label>
+                    </div>
+
+                    <label>Application deadline
+                      <input type="date" required
+                             value={previewOffer.deadline}
+                             min={new Date().toISOString().split('T')[0]}
+                             onChange={(e) => setOffer('deadline', e.target.value)}
+                             style={{ marginTop: 6 }} />
+                    </label>
+                  </div>
+
                   <button
                     className="button button-full"
-                    disabled={previewBusy || !previewDeadline}
+                    style={{ marginTop: 16 }}
+                    disabled={previewBusy || !previewOffer.deadline || !previewOffer.location?.trim()}
                     onClick={handlePost}>
                     {previewBusy ? 'Posting…' : 'Post this role'}
                   </button>
