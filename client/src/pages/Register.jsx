@@ -18,6 +18,7 @@ const INITIAL_FORM = {
   collegeName: '', branch: '', yearOfStudy: '', cgpa: '', graduationYear: '', collegeEmail: '', studentContact: '',
 };
 
+
 export default function Register() {
   const [form, setForm] = useState(INITIAL_FORM);
   const [error, setError] = useState('');
